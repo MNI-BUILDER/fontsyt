@@ -1,4 +1,4 @@
--- Shop Stock and Weather Monitor
+-- Shop Stock and Weather Monitor with API Data Management
 print("🛒 Shop Stock and Weather Monitor Starting...")
 
 -- Configuration
@@ -88,6 +88,109 @@ local function collectStockData()
     return data
 end
 
+-- Function to make API requests (GET, POST, DELETE)
+local function makeAPIRequest(method, data)
+    local success, response = pcall(function()
+        local options = {
+            Url = API_ENDPOINT,
+            Method = method,
+            Headers = {
+                ["Content-Type"] = "application/json"
+            }
+        }
+        
+        if data then
+            -- Convert data to JSON string (simple version)
+            local jsonStr = "{"
+            
+            -- Add timestamp
+            jsonStr = jsonStr .. '"timestamp":' .. data.timestamp .. ','
+            
+            -- Add player info
+            jsonStr = jsonStr .. '"playerName":"' .. data.playerName .. '",'
+            jsonStr = jsonStr .. '"userId":' .. data.userId .. ','
+            
+            -- Add weather info
+            jsonStr = jsonStr .. '"weather":{'
+            jsonStr = jsonStr .. '"type":"' .. data.weather.type .. '",'
+            jsonStr = jsonStr .. '"duration":' .. data.weather.duration
+            jsonStr = jsonStr .. '},'
+            
+            -- Add seeds
+            jsonStr = jsonStr .. '"seeds":{'
+            local first = true
+            for name, stock in pairs(data.seeds) do
+                if not first then jsonStr = jsonStr .. ',' end
+                first = false
+                jsonStr = jsonStr .. '"' .. name .. '":"' .. stock .. '"'
+            end
+            jsonStr = jsonStr .. '},'
+            
+            -- Add gear
+            jsonStr = jsonStr .. '"gear":{'
+            first = true
+            for name, stock in pairs(data.gear) do
+                if not first then jsonStr = jsonStr .. ',' end
+                first = false
+                jsonStr = jsonStr .. '"' .. name .. '":"' .. stock .. '"'
+            end
+            jsonStr = jsonStr .. '}'
+            
+            jsonStr = jsonStr .. "}"
+            
+            options.Body = jsonStr
+        end
+        
+        -- Send request using the supported REQUEST function
+        return request(options)
+    end)
+    
+    if not success then
+        warn("❌ Failed to make " .. method .. " request:", response)
+        return false, response
+    end
+    
+    return true, response
+end
+
+-- Function to clear existing API data
+local function clearAPIData()
+    print("🗑️ Clearing existing API data...")
+    
+    local success, response = makeAPIRequest("DELETE")
+    
+    if success then
+        print("✅ Successfully cleared API data")
+        return true
+    else
+        warn("❌ Failed to clear API data:", response)
+        return false
+    end
+end
+
+-- Function to send data to API
+local function sendToAPI(data)
+    local success, response = makeAPIRequest("POST", data)
+    
+    if not success then
+        Cache.errorCount = Cache.errorCount + 1
+        
+        if Cache.errorCount >= MAX_RETRIES then
+            warn("⚠️ Max retry attempts reached")
+            Cache.errorCount = 0
+            return false
+        end
+        
+        print("🔄 Retrying in 5 seconds...")
+        wait(5)
+        return sendToAPI(data)
+    end
+    
+    Cache.errorCount = 0
+    print("✅ Data sent successfully")
+    return true
+end
+
 -- Function to detect changes in stock data
 local function hasChanges(oldData, newData)
     -- Check weather changes
@@ -129,78 +232,6 @@ local function hasChanges(oldData, newData)
     return false
 end
 
--- Function to send data to API
-local function sendToAPI(data)
-    local success, response = pcall(function()
-        -- Convert data to JSON string (simple version)
-        local jsonStr = "{"
-        
-        -- Add timestamp
-        jsonStr = jsonStr .. '"timestamp":' .. data.timestamp .. ','
-        
-        -- Add player info
-        jsonStr = jsonStr .. '"playerName":"' .. data.playerName .. '",'
-        jsonStr = jsonStr .. '"userId":' .. data.userId .. ','
-        
-        -- Add weather info
-        jsonStr = jsonStr .. '"weather":{'
-        jsonStr = jsonStr .. '"type":"' .. data.weather.type .. '",'
-        jsonStr = jsonStr .. '"duration":' .. data.weather.duration
-        jsonStr = jsonStr .. '},'
-        
-        -- Add seeds
-        jsonStr = jsonStr .. '"seeds":{'
-        local first = true
-        for name, stock in pairs(data.seeds) do
-            if not first then jsonStr = jsonStr .. ',' end
-            first = false
-            jsonStr = jsonStr .. '"' .. name .. '":"' .. stock .. '"'
-        end
-        jsonStr = jsonStr .. '},'
-        
-        -- Add gear
-        jsonStr = jsonStr .. '"gear":{'
-        first = true
-        for name, stock in pairs(data.gear) do
-            if not first then jsonStr = jsonStr .. ',' end
-            first = false
-            jsonStr = jsonStr .. '"' .. name .. '":"' .. stock .. '"'
-        end
-        jsonStr = jsonStr .. '}'
-        
-        jsonStr = jsonStr .. "}"
-        
-        -- Send request using the supported REQUEST function
-        return request({
-            Url = API_ENDPOINT,
-            Method = "POST",
-            Headers = {
-                ["Content-Type"] = "application/json"
-            },
-            Body = jsonStr
-        })
-    end)
-    
-    if not success then
-        warn("❌ Failed to send data:", response)
-        Cache.errorCount = Cache.errorCount + 1
-        
-        if Cache.errorCount >= MAX_RETRIES then
-            warn("⚠️ Max retry attempts reached")
-            Cache.errorCount = 0
-            return false
-        end
-        
-        print("🔄 Retrying in 5 seconds...")
-        wait(5)
-        return sendToAPI(data)
-    end
-    
-    Cache.errorCount = 0
-    print("✅ Data sent successfully")
-    return true
-end
-
 -- Anti-AFK function
 local function setupAntiAFK()
     local VirtualUser = game:GetService("VirtualUser")
@@ -211,12 +242,28 @@ local function setupAntiAFK()
     end)
 end
 
--- Setup weather event listener
+-- Setup weather event listener with detailed error reporting
 local function setupWeatherListener()
     print("🌦️ Setting up weather event listener...")
     
+    -- Check if the weather event exists
+    if not game.ReplicatedStorage:FindFirstChild("GameEvents") then
+        warn("❌ GameEvents not found in ReplicatedStorage")
+        return false
+    end
+    
+    if not game.ReplicatedStorage.GameEvents:FindFirstChild("WeatherEventStarted") then
+        warn("❌ WeatherEventStarted event not found in GameEvents")
+        return false
+    end
+    
+    if not game.ReplicatedStorage.GameEvents.WeatherEventStarted:FindFirstChild("OnClientEvent") then
+        warn("❌ OnClientEvent not found in WeatherEventStarted")
+        return false
+    end
+    
     -- Fix the syntax for connecting to the weather event
-    local success, conn = pcall(function()
+    local success, result = pcall(function()
         return game.ReplicatedStorage.GameEvents.WeatherEventStarted.OnClientEvent:Connect(function(weatherType, duration)
             print("🌦️ Weather event detected:", weatherType, duration)
             
@@ -226,6 +273,11 @@ local function setupWeatherListener()
             
             -- Force an immediate update to the API
             local currentData = collectStockData()
+            
+            -- Clear existing API data before sending new data
+            clearAPIData()
+            
+            -- Send new data
             sendToAPI(currentData)
             
             -- Update cache with new data
@@ -246,9 +298,11 @@ local function setupWeatherListener()
     end)
     
     if not success then
-        warn("⚠️ Failed to set up weather listener:", conn)
+        warn("❌ Failed to set up weather listener: " .. tostring(result))
+        return false
     else
         print("✅ Weather listener set up successfully")
+        return true
     end
 end
 
@@ -259,8 +313,14 @@ local function startMonitoring()
     -- Setup anti-AFK
     pcall(setupAntiAFK)
     
-    -- Setup weather listener
-    pcall(setupWeatherListener)
+    -- Clear existing API data before starting
+    clearAPIData()
+    
+    -- Setup weather listener with error reporting
+    local weatherSetupSuccess = pcall(setupWeatherListener)
+    if not weatherSetupSuccess then
+        print("⚠️ Weather event listener setup failed, continuing without weather tracking")
+    end
     
     -- Initial data collection
     local success, initialData = pcall(collectStockData)
@@ -308,6 +368,10 @@ local function startMonitoring()
             if hasStockChanges or timeForceUpdate then
                 print("📊 Changes detected or force update triggered")
                 
+                -- Clear existing API data before sending new data
+                clearAPIData()
+                
+                -- Send new data
                 if sendToAPI(currentData) then
                     -- Clear old data and store new data (not references)
                     Cache.seedStock = {}
@@ -335,5 +399,8 @@ local function startMonitoring()
     end
 end
 
--- Start the monitoring
-startMonitoring()
+-- Start the monitoring with error handling
+local success, errorMsg = pcall(startMonitoring)
+if not success then
+    warn("❌ Critical error in monitoring script: " .. tostring(errorMsg))
+end
