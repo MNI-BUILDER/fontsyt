@@ -1,5 +1,5 @@
--- Simple Shop Stock Monitor (based on reference)
-print("🛒 Shop Stock Monitor Starting...")
+-- Shop Stock and Weather Monitor
+print("🛒 Shop Stock and Weather Monitor Starting...")
 
 -- Configuration
 local API_ENDPOINT = "https://gamersbergbotapi.vercel.app/api/statics/testingbot"
@@ -10,6 +10,8 @@ local MAX_RETRIES = 3
 local Cache = {
     seedStock = {},
     gearStock = {},
+    currentWeather = "None",
+    weatherDuration = 0,
     lastUpdate = 0,
     errorCount = 0
 }
@@ -56,22 +58,27 @@ end
 
 -- Function to collect all stock data
 local function collectStockData()
+    -- Create a completely new data object (old data gets garbage collected)
     local data = {
         seeds = {},
         gear = {},
+        weather = {
+            type = Cache.currentWeather,
+            duration = Cache.weatherDuration
+        },
         timestamp = os.time(),
         playerName = game.Players.LocalPlayer.Name,
         userId = game.Players.LocalPlayer.UserId
     }
     
-    -- Collect seed data
+    -- Collect seed data (fresh collection, not using old data)
     local seedNames = getAvailableSeedNames()
     for _, seedName in ipairs(seedNames) do
         local stock = checkStock(seedName, "Seed_Shop")
         data.seeds[seedName] = stock
     end
     
-    -- Collect gear data
+    -- Collect gear data (fresh collection, not using old data)
     local gearNames = getAvailableGearNames()
     for _, gearName in ipairs(gearNames) do
         local stock = checkStock(gearName, "Gear_Shop")
@@ -83,6 +90,12 @@ end
 
 -- Function to detect changes in stock data
 local function hasChanges(oldData, newData)
+    -- Check weather changes
+    if oldData.weather.type ~= newData.weather.type or 
+       oldData.weather.duration ~= newData.weather.duration then
+        return true
+    end
+    
     -- Check seeds
     for seedName, newStock in pairs(newData.seeds) do
         if oldData.seeds[seedName] ~= newStock then
@@ -90,11 +103,12 @@ local function hasChanges(oldData, newData)
         end
     end
     
-    -- Check for new seeds
-    for seedName, _ in pairs(oldData.seeds) do
-        if newData.seeds[seedName] == nil then
-            return true
-        end
+    -- Check for new or removed seeds
+    local oldSeedCount, newSeedCount = 0, 0
+    for _ in pairs(oldData.seeds) do oldSeedCount = oldSeedCount + 1 end
+    for _ in pairs(newData.seeds) do newSeedCount = newSeedCount + 1 end
+    if oldSeedCount ~= newSeedCount then
+        return true
     end
     
     -- Check gear
@@ -104,11 +118,12 @@ local function hasChanges(oldData, newData)
         end
     end
     
-    -- Check for new gear
-    for gearName, _ in pairs(oldData.gear) do
-        if newData.gear[gearName] == nil then
-            return true
-        end
+    -- Check for new or removed gear
+    local oldGearCount, newGearCount = 0, 0
+    for _ in pairs(oldData.gear) do oldGearCount = oldGearCount + 1 end
+    for _ in pairs(newData.gear) do newGearCount = newGearCount + 1 end
+    if oldGearCount ~= newGearCount then
+        return true
     end
     
     return false
@@ -126,6 +141,12 @@ local function sendToAPI(data)
         -- Add player info
         jsonStr = jsonStr .. '"playerName":"' .. data.playerName .. '",'
         jsonStr = jsonStr .. '"userId":' .. data.userId .. ','
+        
+        -- Add weather info
+        jsonStr = jsonStr .. '"weather":{'
+        jsonStr = jsonStr .. '"type":"' .. data.weather.type .. '",'
+        jsonStr = jsonStr .. '"duration":' .. data.weather.duration
+        jsonStr = jsonStr .. '},'
         
         -- Add seeds
         jsonStr = jsonStr .. '"seeds":{'
@@ -190,18 +211,72 @@ local function setupAntiAFK()
     end)
 end
 
+-- Setup weather event listener
+local function setupWeatherListener()
+    print("🌦️ Setting up weather event listener...")
+    
+    -- Fix the syntax for connecting to the weather event
+    local success, conn = pcall(function()
+        return game.ReplicatedStorage.GameEvents.WeatherEventStarted.OnClientEvent:Connect(function(weatherType, duration)
+            print("🌦️ Weather event detected:", weatherType, duration)
+            
+            -- Update weather cache
+            Cache.currentWeather = weatherType or "None"
+            Cache.weatherDuration = duration or 0
+            
+            -- Force an immediate update to the API
+            local currentData = collectStockData()
+            sendToAPI(currentData)
+            
+            -- Update cache with new data
+            Cache.seedStock = {}  -- Clear old data
+            Cache.gearStock = {}  -- Clear old data
+            
+            -- Copy new data (not references)
+            for k, v in pairs(currentData.seeds) do
+                Cache.seedStock[k] = v
+            end
+            
+            for k, v in pairs(currentData.gear) do
+                Cache.gearStock[k] = v
+            end
+            
+            Cache.lastUpdate = os.time()
+        end)
+    end)
+    
+    if not success then
+        warn("⚠️ Failed to set up weather listener:", conn)
+    else
+        print("✅ Weather listener set up successfully")
+    end
+end
+
 -- Main monitoring function
 local function startMonitoring()
-    print("🛒 Shop Stock Monitor Started")
+    print("🛒 Shop Stock and Weather Monitor Started")
     
     -- Setup anti-AFK
     pcall(setupAntiAFK)
     
+    -- Setup weather listener
+    pcall(setupWeatherListener)
+    
     -- Initial data collection
     local success, initialData = pcall(collectStockData)
     if success then
-        Cache.seedStock = initialData.seeds
-        Cache.gearStock = initialData.gear
+        -- Clear old data and store new data (not references)
+        Cache.seedStock = {}
+        Cache.gearStock = {}
+        
+        for k, v in pairs(initialData.seeds) do
+            Cache.seedStock[k] = v
+        end
+        
+        for k, v in pairs(initialData.gear) do
+            Cache.gearStock[k] = v
+        end
+        
         Cache.lastUpdate = os.time()
         
         -- Send initial data
@@ -216,17 +291,38 @@ local function startMonitoring()
         
         if success then
             local currentTime = os.time()
-            local hasStockChanges = hasChanges({seeds = Cache.seedStock, gear = Cache.gearStock}, currentData)
+            
+            -- Create a comparison object with the same structure as currentData
+            local oldData = {
+                seeds = Cache.seedStock,
+                gear = Cache.gearStock,
+                weather = {
+                    type = Cache.currentWeather,
+                    duration = Cache.weatherDuration
+                }
+            }
+            
+            local hasStockChanges = hasChanges(oldData, currentData)
             local timeForceUpdate = (currentTime - Cache.lastUpdate) >= 300  -- Force update every 5 minutes
             
             if hasStockChanges or timeForceUpdate then
-                print("📊 Stock changes detected or force update triggered")
+                print("📊 Changes detected or force update triggered")
                 
                 if sendToAPI(currentData) then
-                    Cache.seedStock = currentData.seeds
-                    Cache.gearStock = currentData.gear
+                    -- Clear old data and store new data (not references)
+                    Cache.seedStock = {}
+                    Cache.gearStock = {}
+                    
+                    for k, v in pairs(currentData.seeds) do
+                        Cache.seedStock[k] = v
+                    end
+                    
+                    for k, v in pairs(currentData.gear) do
+                        Cache.gearStock[k] = v
+                    end
+                    
                     Cache.lastUpdate = currentTime
-                    print("📊 Stock data updated successfully")
+                    print("📊 Data updated successfully")
                 end
             else
                 print("📊 No changes detected")
