@@ -1,163 +1,243 @@
--- Ultra-simplified script using only supported functions
-print("Script starting...")
+-- Simple Shop Stock Monitor (based on reference)
+print("🛒 Shop Stock Monitor Starting...")
 
--- Function to make HTTP requests (using the supported REQUEST function)
-local function makeRequest(url, method, data)
-    method = method or "GET"
-    
-    local options = {
-        Url = url,
-        Method = method
-    }
-    
-    if data then
-        options.Body = data
-        options.Headers = {
-            ["Content-Type"] = "application/json"
-        }
+-- Configuration
+local API_ENDPOINT = "https://gamersbergbotapi.vercel.app/api/statics/testingbot"
+local CHECK_INTERVAL = 5  -- Check every 5 seconds
+local MAX_RETRIES = 3
+
+-- Cache to track changes
+local Cache = {
+    seedStock = {},
+    gearStock = {},
+    lastUpdate = 0,
+    errorCount = 0
+}
+
+-- Function to check stock for a specific item
+local function checkStock(fruit, shopType)
+    for _, des in pairs(game.Players.LocalPlayer.PlayerGui[shopType].Frame.ScrollingFrame:GetDescendants()) do
+        if des.Name == "Stock_Text" and des.Parent.Parent.Name == fruit then
+            return string.match(des.Text, "%d+")
+        end
     end
-    
-    local success, response = pcall(function()
-        return request(options)
-    end)
-    
-    if success then
-        return response
-    else
-        print("Request failed: " .. tostring(response))
-        return nil
-    end
+    return "0"
 end
 
--- API endpoint
-local API_ENDPOINT = "https://gamersbergbotapi.vercel.app/api/statics/testingbot"
+-- Function to get all available seed names
+local function getAvailableSeedNames()
+    local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("Seed_Shop")
+    if not shopUI then return {} end
 
--- Simple data collection function
-local function collectData()
+    local names = {}
+    local scroll = shopUI.Frame.ScrollingFrame
+    for _, item in pairs(scroll:GetChildren()) do
+        if item:IsA("Frame") and not item.Name:match("_Padding$") then
+            table.insert(names, item.Name)
+        end
+    end
+    return names
+end
+
+-- Function to get all available gear names
+local function getAvailableGearNames()
+    local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("Gear_Shop")
+    if not shopUI then return {} end
+
+    local names = {}
+    local scroll = shopUI.Frame.ScrollingFrame
+    for _, item in pairs(scroll:GetChildren()) do
+        if item:IsA("Frame") and not item.Name:match("_Padding$") then
+            table.insert(names, item.Name)
+        end
+    end
+    return names
+end
+
+-- Function to collect all stock data
+local function collectStockData()
     local data = {
+        seeds = {},
+        gear = {},
         timestamp = os.time(),
-        executor = "Limited Functionality Executor",
-        data = {}
+        playerName = game.Players.LocalPlayer.Name,
+        userId = game.Players.LocalPlayer.UserId
     }
     
-    -- Try to get player info if available
-    pcall(function()
-        if game and game:GetService("Players") and game:GetService("Players").LocalPlayer then
-            data.playerName = game:GetService("Players").LocalPlayer.Name
-            data.userId = game:GetService("Players").LocalPlayer.UserId
-        end
-    end)
+    -- Collect seed data
+    local seedNames = getAvailableSeedNames()
+    for _, seedName in ipairs(seedNames) do
+        local stock = checkStock(seedName, "Seed_Shop")
+        data.seeds[seedName] = stock
+    end
     
-    -- Try to find shop UIs
-    pcall(function()
-        if game and game:GetService("Players") and game:GetService("Players").LocalPlayer and 
-           game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui") then
-            
-            local playerGui = game:GetService("Players").LocalPlayer.PlayerGui
-            local shopData = {}
-            
-            -- Look for any GUI that might be a shop
-            for _, gui in pairs(playerGui:GetChildren()) do
-                if gui:IsA("ScreenGui") then
-                    local guiInfo = {
-                        name = gui.Name,
-                        children = {}
-                    }
-                    
-                    -- Try to find any stock information
-                    pcall(function()
-                        for _, desc in pairs(gui:GetDescendants()) do
-                            if desc:IsA("TextLabel") and desc.Name:match("Stock") then
-                                table.insert(guiInfo.children, {
-                                    name = desc.Name,
-                                    text = desc.Text,
-                                    parent = desc.Parent and desc.Parent.Name or "Unknown"
-                                })
-                            end
-                        end
-                    end)
-                    
-                    if #guiInfo.children > 0 then
-                        shopData[gui.Name] = guiInfo
-                    end
-                end
-            end
-            
-            data.shops = shopData
-        end
-    end)
+    -- Collect gear data
+    local gearNames = getAvailableGearNames()
+    for _, gearName in ipairs(gearNames) do
+        local stock = checkStock(gearName, "Gear_Shop")
+        data.gear[gearName] = stock
+    end
     
     return data
 end
 
--- Function to convert table to JSON (since JSONEncode might not be available)
-local function tableToJSON(tbl)
-    local json = "{"
-    local first = true
-    
-    for k, v in pairs(tbl) do
-        if not first then
-            json = json .. ","
-        end
-        first = false
-        
-        -- Key
-        json = json .. '"' .. tostring(k) .. '":'
-        
-        -- Value
-        if type(v) == "table" then
-            json = json .. tableToJSON(v)
-        elseif type(v) == "string" then
-            json = json .. '"' .. v:gsub('"', '\\"') .. '"'
-        elseif type(v) == "number" or type(v) == "boolean" then
-            json = json .. tostring(v)
-        else
-            json = json .. '""'
+-- Function to detect changes in stock data
+local function hasChanges(oldData, newData)
+    -- Check seeds
+    for seedName, newStock in pairs(newData.seeds) do
+        if oldData.seeds[seedName] ~= newStock then
+            return true
         end
     end
     
-    json = json .. "}"
-    return json
+    -- Check for new seeds
+    for seedName, _ in pairs(oldData.seeds) do
+        if newData.seeds[seedName] == nil then
+            return true
+        end
+    end
+    
+    -- Check gear
+    for gearName, newStock in pairs(newData.gear) do
+        if oldData.gear[gearName] ~= newStock then
+            return true
+        end
+    end
+    
+    -- Check for new gear
+    for gearName, _ in pairs(oldData.gear) do
+        if newData.gear[gearName] == nil then
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- Function to send data to API
+local function sendToAPI(data)
+    local success, response = pcall(function()
+        -- Convert data to JSON string (simple version)
+        local jsonStr = "{"
+        
+        -- Add timestamp
+        jsonStr = jsonStr .. '"timestamp":' .. data.timestamp .. ','
+        
+        -- Add player info
+        jsonStr = jsonStr .. '"playerName":"' .. data.playerName .. '",'
+        jsonStr = jsonStr .. '"userId":' .. data.userId .. ','
+        
+        -- Add seeds
+        jsonStr = jsonStr .. '"seeds":{'
+        local first = true
+        for name, stock in pairs(data.seeds) do
+            if not first then jsonStr = jsonStr .. ',' end
+            first = false
+            jsonStr = jsonStr .. '"' .. name .. '":"' .. stock .. '"'
+        end
+        jsonStr = jsonStr .. '},'
+        
+        -- Add gear
+        jsonStr = jsonStr .. '"gear":{'
+        first = true
+        for name, stock in pairs(data.gear) do
+            if not first then jsonStr = jsonStr .. ',' end
+            first = false
+            jsonStr = jsonStr .. '"' .. name .. '":"' .. stock .. '"'
+        end
+        jsonStr = jsonStr .. '}'
+        
+        jsonStr = jsonStr .. "}"
+        
+        -- Send request using the supported REQUEST function
+        return request({
+            Url = API_ENDPOINT,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = jsonStr
+        })
+    end)
+    
+    if not success then
+        warn("❌ Failed to send data:", response)
+        Cache.errorCount = Cache.errorCount + 1
+        
+        if Cache.errorCount >= MAX_RETRIES then
+            warn("⚠️ Max retry attempts reached")
+            Cache.errorCount = 0
+            return false
+        end
+        
+        print("🔄 Retrying in 5 seconds...")
+        wait(5)
+        return sendToAPI(data)
+    end
+    
+    Cache.errorCount = 0
+    print("✅ Data sent successfully")
+    return true
+end
+
+-- Anti-AFK function
+local function setupAntiAFK()
+    local VirtualUser = game:GetService("VirtualUser")
+    game.Players.LocalPlayer.Idled:Connect(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+        print("🔄 Anti-AFK triggered")
+    end)
 end
 
 -- Main monitoring function
 local function startMonitoring()
-    print("Starting monitoring...")
+    print("🛒 Shop Stock Monitor Started")
+    
+    -- Setup anti-AFK
+    pcall(setupAntiAFK)
     
     -- Initial data collection
-    local lastData = collectData()
-    print("Initial data collected")
-    
-    -- Send initial data
-    local response = makeRequest(API_ENDPOINT, "POST", tableToJSON(lastData))
-    if response then
-        print("Initial data sent successfully")
-        if response.Body then
-            print("Response: " .. response.Body)
-        end
+    local success, initialData = pcall(collectStockData)
+    if success then
+        Cache.seedStock = initialData.seeds
+        Cache.gearStock = initialData.gear
+        Cache.lastUpdate = os.time()
+        
+        -- Send initial data
+        sendToAPI(initialData)
     else
-        print("Failed to send initial data")
+        warn("❌ Failed to collect initial data:", initialData)
     end
     
-    -- Monitoring loop
+    -- Main monitoring loop
     while true do
-        wait(5) -- Check every 5 seconds
+        local success, currentData = pcall(collectStockData)
         
-        local currentData = collectData()
-        print("Data collected, sending to API...")
-        
-        -- Send current data
-        local response = makeRequest(API_ENDPOINT, "POST", tableToJSON(currentData))
-        if response then
-            print("Data sent successfully")
-            if response.Body then
-                print("Response: " .. response.Body)
+        if success then
+            local currentTime = os.time()
+            local hasStockChanges = hasChanges({seeds = Cache.seedStock, gear = Cache.gearStock}, currentData)
+            local timeForceUpdate = (currentTime - Cache.lastUpdate) >= 300  -- Force update every 5 minutes
+            
+            if hasStockChanges or timeForceUpdate then
+                print("📊 Stock changes detected or force update triggered")
+                
+                if sendToAPI(currentData) then
+                    Cache.seedStock = currentData.seeds
+                    Cache.gearStock = currentData.gear
+                    Cache.lastUpdate = currentTime
+                    print("📊 Stock data updated successfully")
+                end
+            else
+                print("📊 No changes detected")
             end
         else
-            print("Failed to send data")
+            warn("❌ Error collecting data:", currentData)
         end
+        
+        wait(CHECK_INTERVAL)
     end
 end
 
--- Start monitoring
+-- Start the monitoring
 startMonitoring()
