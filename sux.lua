@@ -1,391 +1,119 @@
--- Variables for player and services
-local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
+-- Ultra-simplified version with maximum error checking
+print("Script starting...")
 
--- API endpoint configuration
-local API_ENDPOINT = "https://gamersbergbotapi.vercel.app/api/statics/testingbot"
-
--- Configuration
-local CHECK_INTERVAL = 1 -- Check every 1 second
-local RUNNING = true -- Control variable to stop the loop if needed
-
--- Function to deep copy a table
-local function deepCopy(original)
-    local copy
-    if type(original) == "table" then
-        copy = {}
-        for key, value in pairs(original) do
-            copy[key] = deepCopy(value)
-        end
-    else
-        copy = original
-    end
-    return copy
+-- Wait for game to load
+if not game then
+    print("Game not available, waiting...")
+    repeat wait(1) until game
+    print("Game loaded")
 end
 
--- Improved function to get available items from a shop
-local function getAvailableItems(shopType)
-    -- Make sure LocalPlayer is valid
-    if not LocalPlayer then
-        warn("LocalPlayer is nil")
-        return {}
-    end
-    
-    -- Make sure PlayerGui exists
-    if not LocalPlayer:FindFirstChild("PlayerGui") then
-        warn("PlayerGui not found")
-        return {}
-    end
-    
-    local shopName = shopType == "seed" and "Seed_Shop" or "Gear_Shop"
-    local shopUI = LocalPlayer.PlayerGui:FindFirstChild(shopName)
-    
-    if not shopUI then 
-        warn("Shop UI not found: " .. shopName)
-        return {} 
-    end
-    
-    -- Make sure the UI structure is as expected
-    if not shopUI:FindFirstChild("Frame") or not shopUI.Frame:FindFirstChild("ScrollingFrame") then
-        warn("Expected UI structure not found in " .. shopName)
-        return {}
-    end
+-- Basic variables
+local success, errorMsg
 
-    local names = {}
-    local scroll = shopUI.Frame.ScrollingFrame
-    for _, item in pairs(scroll:GetChildren()) do
-        if item:IsA("Frame") and not item.Name:match("_Padding$") then
-            table.insert(names, item.Name)
-        end
-    end
-    return names
-end
-
--- Unified function to check stock for any item
-local function getItemStock(itemName, shopType)
-    -- Make sure LocalPlayer is valid
-    if not LocalPlayer then
-        warn("LocalPlayer is nil")
-        return 0
-    end
-    
-    -- Make sure PlayerGui exists
-    if not LocalPlayer:FindFirstChild("PlayerGui") then
-        warn("PlayerGui not found")
-        return 0
-    end
-    
-    local shopName = shopType == "seed" and "Seed_Shop" or "Gear_Shop"
-    local shopUI = LocalPlayer.PlayerGui:FindFirstChild(shopName)
-    
-    if not shopUI then
-        warn("Shop UI not found: " .. shopName)
-        return 0
-    end
-    
-    -- Make sure the UI structure is as expected
-    if not shopUI:FindFirstChild("Frame") or not shopUI.Frame:FindFirstChild("ScrollingFrame") then
-        warn("Expected UI structure not found in " .. shopName)
-        return 0
-    end
-
-    -- Find the item frame
-    local itemFrame
-    for _, frame in pairs(shopUI.Frame.ScrollingFrame:GetChildren()) do
-        if frame:IsA("Frame") and frame.Name == itemName then
-            itemFrame = frame
-            break
-        end
-    end
-
-    if not itemFrame then
-        warn("Item not found in shop: " .. itemName)
-        return 0
-    end
-
-    -- Find the stock text
-    for _, desc in pairs(itemFrame:GetDescendants()) do
-        if desc:IsA("TextLabel") and desc.Name == "Stock_Text" then
-            local stockText = desc.Text or "0"
-            local stock = tonumber(string.match(stockText, "%d+"))
-            return stock or 0
-        end
-    end
-
-    warn("Stock text not found for item: " .. itemName)
-    return 0
-end
-
--- Function to collect all stock data
-local function collectAllStockData()
-    -- Make sure LocalPlayer is valid
-    if not LocalPlayer then
-        error("LocalPlayer is nil")
-        return nil
-    end
-    
-    local stockData = {
-        seeds = {},
-        gear = {},
-        timestamp = os.time(),
-        playerName = LocalPlayer.Name,
-        userId = LocalPlayer.UserId
-    }
-
-    -- Collect seed data
-    local seedNames = getAvailableItems("seed")
-    for _, seedName in ipairs(seedNames) do
-        local stock = getItemStock(seedName, "seed")
-        stockData.seeds[seedName] = stock
-    end
-
-    -- Collect gear data
-    local gearNames = getAvailableItems("gear")
-    for _, gearName in ipairs(gearNames) do
-        local stock = getItemStock(gearName, "gear")
-        stockData.gear[gearName] = stock
-    end
-
-    return stockData
-end
-
--- Function to send data to API using executor's request function or Roblox's HttpService
-local function sendDataToAPI(data)
-    -- Convert data to JSON
-    local jsonData
-    local success, result
-    
-    -- Try to use HttpService for JSON encoding
-    local HttpService
-    success, HttpService = pcall(function()
-        return game:GetService("HttpService")
-    end)
-    
-    if not success or not HttpService then
-        warn("Failed to get HttpService")
-        return false
-    end
-    
-    success, jsonData = pcall(function()
-        return HttpService:JSONEncode(data)
-    end)
-    
-    if not success then
-        warn("Failed to encode data to JSON")
-        return false
-    end
-    
-    -- Try different HTTP request methods based on what's available
-    if syn and syn.request then
-        -- Synapse X
-        success, result = pcall(function()
-            return syn.request({
-                Url = API_ENDPOINT,
-                Method = "POST",
-                Headers = {
-                    ["Content-Type"] = "application/json"
-                },
-                Body = jsonData
-            })
-        end)
-    elseif http and http.request then
-        -- Other executors
-        success, result = pcall(function()
-            return http.request({
-                Url = API_ENDPOINT,
-                Method = "POST",
-                Headers = {
-                    ["Content-Type"] = "application/json"
-                },
-                Body = jsonData
-            })
-        end)
-    elseif request then
-        -- Generic request function
-        success, result = pcall(function()
-            return request({
-                Url = API_ENDPOINT,
-                Method = "POST",
-                Headers = {
-                    ["Content-Type"] = "application/json"
-                },
-                Body = jsonData
-            })
-        end)
-    elseif httpservice then
-        -- Custom httpservice
-        success, result = pcall(function()
-            return httpservice.request({
-                Url = API_ENDPOINT,
-                Method = "POST",
-                Headers = {
-                    ["Content-Type"] = "application/json"
-                },
-                Body = jsonData
-            })
-        end)
-    else
-        -- Try Roblox's HttpService as a last resort
-        success, result = pcall(function()
-            return HttpService:PostAsync(API_ENDPOINT, jsonData, Enum.HttpContentType.ApplicationJson)
-        end)
-    end
-    
-    if not success then
-        warn("Failed to send data to API: " .. tostring(result))
-        return false
-    end
-    
-    print("API Response: ", type(result) == "table" and result.Body or tostring(result))
-    return true
-end
-
--- Function to detect changes in stock data
-local function detectChanges(previousData, currentData)
-    if not previousData then return true end
-    
-    -- Check seeds
-    for seedName, currentStock in pairs(currentData.seeds) do
-        if previousData.seeds[seedName] ~= currentStock then
-            print("Change detected in seed: " .. seedName .. " (Old: " .. (previousData.seeds[seedName] or "nil") .. ", New: " .. currentStock .. ")")
-            return true
-        end
-    end
-    
-    -- Check for new seeds
-    for seedName, _ in pairs(previousData.seeds) do
-        if currentData.seeds[seedName] == nil then
-            print("Seed removed: " .. seedName)
-            return true
-        end
-    end
-    
-    -- Check gear
-    for gearName, currentStock in pairs(currentData.gear) do
-        if previousData.gear[gearName] ~= currentStock then
-            print("Change detected in gear: " .. gearName .. " (Old: " .. (previousData.gear[gearName] or "nil") .. ", New: " .. currentStock .. ")")
-            return true
-        end
-    end
-    
-    -- Check for new gear
-    for gearName, _ in pairs(previousData.gear) do
-        if currentData.gear[gearName] == nil then
-            print("Gear removed: " .. gearName)
-            return true
-        end
-    end
-    
-    return false
-end
-
--- Main monitoring function
-local function startStockMonitoring()
-    print("Starting continuous stock monitoring...")
-    
-    -- Make sure LocalPlayer is valid before starting
-    if not LocalPlayer then
-        warn("LocalPlayer is nil. Waiting for player to load...")
-        
-        -- Wait for player to load
-        while not LocalPlayer and wait(1) do
-            LocalPlayer = Players.LocalPlayer
-        end
-        
-        if not LocalPlayer then
-            error("Failed to get LocalPlayer after waiting")
-            return
-        end
-    end
-    
-    print("Player loaded: " .. LocalPlayer.Name)
-    
-    local previousStockData = nil
-    local updateCount = 0
-    local lastUpdateTime = 0
-    
-    -- Main monitoring loop
-    while RUNNING do
-        local success, currentStockData = pcall(collectAllStockData)
-        
-        if success and currentStockData then
-            local changesDetected = detectChanges(previousStockData, currentStockData)
-            
-            if changesDetected then
-                updateCount = updateCount + 1
-                print("Changes detected! Update #" .. updateCount)
-                
-                -- Send data to API
-                local apiSuccess = sendDataToAPI(currentStockData)
-                
-                if apiSuccess then
-                    print("Successfully sent updated stock data to API")
-                    lastUpdateTime = os.time()
-                    -- Update previous data after successful API update
-                    previousStockData = deepCopy(currentStockData)
-                else
-                    print("Failed to send data to API, will retry on next change")
-                end
-            else
-                -- No changes detected
-                local timeSinceLastUpdate = os.time() - lastUpdateTime
-                if timeSinceLastUpdate >= 60 then  -- Send heartbeat update every minute even if no changes
-                    print("No changes for 60 seconds, sending heartbeat update")
-                    sendDataToAPI(currentStockData)
-                    lastUpdateTime = os.time()
-                else
-                    print("No changes detected. Checking again in " .. CHECK_INTERVAL .. " second(s)")
-                end
-            end
-        else
-            warn("Error collecting stock data: " .. tostring(currentStockData))
-        end
-        
-        wait(CHECK_INTERVAL)
-    end
-    
-    print("Stock monitoring stopped")
-end
-
--- Function to stop monitoring
-local function stopMonitoring()
-    RUNNING = false
-    print("Stopping monitoring...")
-end
-
--- Wrap the entire execution in pcall to catch any errors
-local success, errorMsg = pcall(function()
-    -- Make sure Players service is available
+-- Wait for Players service
+local Players
+success, Players = pcall(function() return game:GetService("Players") end)
+if not success or not Players then
+    print("Failed to get Players service: " .. tostring(Players))
+    Players = game:FindService("Players")
     if not Players then
-        error("Players service is nil")
-        return
+        print("Still can't find Players service. Trying alternative...")
+        Players = game.Players
     end
-    
-    -- Get LocalPlayer, wait if necessary
-    if not LocalPlayer then
-        print("Waiting for LocalPlayer...")
-        LocalPlayer = Players.LocalPlayer
-        
-        -- If still nil, wait for it
-        if not LocalPlayer then
-            local waitCount = 0
-            while not LocalPlayer and waitCount < 10 do
-                wait(1)
-                LocalPlayer = Players.LocalPlayer
-                waitCount = waitCount + 1
-            end
-        end
-    end
-    
-    if not LocalPlayer then
-        error("Failed to get LocalPlayer")
-        return
-    end
-    
-    -- Start monitoring
-    startStockMonitoring()
-end)
-
-if not success then
-    warn("Script error: " .. tostring(errorMsg))
 end
+
+if not Players then
+    print("CRITICAL ERROR: Players service is completely unavailable")
+    return
+end
+print("Players service loaded successfully")
+
+-- Wait for LocalPlayer
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    print("LocalPlayer not available, waiting...")
+    local waitTime = 0
+    while not LocalPlayer and waitTime < 30 do
+        wait(1)
+        waitTime = waitTime + 1
+        LocalPlayer = Players.LocalPlayer
+        print("Waiting for player... " .. waitTime .. " seconds")
+    end
+end
+
+if not LocalPlayer then
+    print("CRITICAL ERROR: LocalPlayer could not be loaded after 30 seconds")
+    return
+end
+print("LocalPlayer loaded: " .. LocalPlayer.Name)
+
+-- Wait for PlayerGui
+if not LocalPlayer:FindFirstChild("PlayerGui") then
+    print("PlayerGui not available, waiting...")
+    local waitTime = 0
+    while not LocalPlayer:FindFirstChild("PlayerGui") and waitTime < 30 do
+        wait(1)
+        waitTime = waitTime + 1
+        print("Waiting for PlayerGui... " .. waitTime .. " seconds")
+    end
+end
+
+if not LocalPlayer:FindFirstChild("PlayerGui") then
+    print("CRITICAL ERROR: PlayerGui could not be loaded after 30 seconds")
+    return
+end
+print("PlayerGui loaded successfully")
+
+-- Debug function to print UI structure
+local function printUIStructure(parent, level)
+    level = level or 0
+    local indent = string.rep("  ", level)
+    
+    print(indent .. parent.Name .. " [" .. parent.ClassName .. "]")
+    
+    for _, child in pairs(parent:GetChildren()) do
+        printUIStructure(child, level + 1)
+    end
+end
+
+-- Print all GUIs to help identify the correct ones
+print("Listing all GUIs in PlayerGui:")
+for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do
+    print("- " .. gui.Name .. " [" .. gui.ClassName .. "]")
+end
+
+-- Try to find shop GUIs with flexible naming
+local seedShopUI, gearShopUI
+
+-- Look for anything with "Seed" in the name
+for _, gui in pairs(LocalPlayer.PlayerGui:GetChildren()) do
+    if gui.Name:match("[Ss]eed") then
+        seedShopUI = gui
+        print("Found potential Seed Shop UI: " .. gui.Name)
+    end
+    if gui.Name:match("[Gg]ear") then
+        gearShopUI = gui
+        print("Found potential Gear Shop UI: " .. gui.Name)
+    end
+end
+
+-- If found, print their structure
+if seedShopUI then
+    print("Seed Shop UI Structure:")
+    printUIStructure(seedShopUI, 1)
+else
+    print("No Seed Shop UI found")
+end
+
+if gearShopUI then
+    print("Gear Shop UI Structure:")
+    printUIStructure(gearShopUI, 1)
+else
+    print("No Gear Shop UI found")
+end
+
+print("Script completed successfully")
+
+-- This is just a diagnostic script to help identify the correct UI structure
+-- Once you see the output, you can modify the main script to match your game's UI structure
