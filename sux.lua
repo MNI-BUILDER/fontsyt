@@ -2,8 +2,8 @@
 print("🛒 Shop Stock and Weather Monitor Starting...")
 
 -- Configuration
-local API_ENDPOINT = "https://gamersbergbotapi.vercel.app/api/statics/testingbot"
-local CHECK_INTERVAL = 5  -- Check every 5 seconds
+local API_ENDPOINT = "https:// gag.vercel.app/api/data"
+local CHECK_INTERVAL = 1  -- Check every 5 seconds
 local MAX_RETRIES = 3
 
 -- Cache to track changes
