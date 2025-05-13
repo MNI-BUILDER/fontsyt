@@ -1,5 +1,5 @@
--- Shop Stock and Weather Monitor
-print("🛒 Shop Stock and Weather Monitor Starting...")
+-- Shop Stock, Weather, and Egg Monitor
+print("🛒 Shop Stock, Weather, and Egg Monitor Starting...")
 
 -- Configuration
 local API_ENDPOINT = "https://gagdata.vercel.app/api/data"  -- Updated API endpoint
@@ -11,11 +11,41 @@ local MAX_RETRIES = 3
 local Cache = {
     seedStock = {},
     gearStock = {},
+    eggs = {},
     currentWeather = "None",
     weatherDuration = 0,
     lastUpdate = 0,
     errorCount = 0
 }
+
+-- Function to collect egg data
+local function collectEggData()
+    print("🥚 Collecting egg data...")
+    local Eggs = {}
+    
+    -- Try to get the egg data module
+    local success, result = pcall(function()
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local EggShop = require(ReplicatedStorage.Data.PetEggData)
+        
+        for _, Egg in next, EggShop do
+            if Egg.StockChance > 0 then
+                table.insert(Eggs, Egg.EggName)
+                print("🥚 Found egg with stock chance > 0: " .. Egg.EggName)
+            end
+        end
+        
+        return Eggs
+    end)
+    
+    if success then
+        print("✅ Successfully collected egg data: " .. #result .. " eggs found")
+        return result
+    else
+        warn("❌ Failed to collect egg data: " .. tostring(result))
+        return {}
+    end
+end
 
 -- Function to check stock for a specific item
 local function checkStock(fruit, shopType)
@@ -63,6 +93,7 @@ local function collectStockData()
     local data = {
         seeds = {},
         gear = {},
+        eggs = Cache.eggs,  -- Include egg data
         weather = {
             type = Cache.currentWeather,
             duration = Cache.weatherDuration
@@ -95,6 +126,18 @@ local function hasChanges(oldData, newData)
     if oldData.weather.type ~= newData.weather.type or 
        oldData.weather.duration ~= newData.weather.duration then
         return true
+    end
+    
+    -- Check eggs (compare length first for quick check)
+    if #oldData.eggs ~= #newData.eggs then
+        return true
+    end
+    
+    -- Check each egg
+    for i, eggName in ipairs(newData.eggs) do
+        if oldData.eggs[i] ~= eggName then
+            return true
+        end
     end
     
     -- Check seeds
@@ -148,6 +191,14 @@ local function sendToAPI(data)
         jsonStr = jsonStr .. '"type":"' .. data.weather.type .. '",'
         jsonStr = jsonStr .. '"duration":' .. data.weather.duration
         jsonStr = jsonStr .. '},'
+        
+        -- Add eggs array
+        jsonStr = jsonStr .. '"eggs":['
+        for i, eggName in ipairs(data.eggs) do
+            if i > 1 then jsonStr = jsonStr .. ',' end
+            jsonStr = jsonStr .. '"' .. eggName .. '"'
+        end
+        jsonStr = jsonStr .. '],'
         
         -- Add seeds
         jsonStr = jsonStr .. '"seeds":{'
@@ -256,7 +307,7 @@ end
 
 -- Main monitoring function
 local function startMonitoring()
-    print("🛒 Shop Stock and Weather Monitor Started")
+    print("🛒 Shop Stock, Weather, and Egg Monitor Started")
     print("📡 Using API endpoint: " .. API_ENDPOINT)
     
     -- Setup anti-AFK
@@ -264,6 +315,9 @@ local function startMonitoring()
     
     -- Setup weather listener
     pcall(setupWeatherListener)
+    
+    -- Collect egg data
+    Cache.eggs = collectEggData()
     
     -- Initial data collection
     local success, initialData = pcall(collectStockData)
@@ -295,10 +349,17 @@ local function startMonitoring()
         if success then
             local currentTime = os.time()
             
+            -- Periodically refresh egg data (every 5 minutes)
+            if (currentTime - Cache.lastUpdate) >= 300 then
+                Cache.eggs = collectEggData()
+                currentData.eggs = Cache.eggs
+            end
+            
             -- Create a comparison object with the same structure as currentData
             local oldData = {
                 seeds = Cache.seedStock,
                 gear = Cache.gearStock,
+                eggs = Cache.eggs,
                 weather = {
                     type = Cache.currentWeather,
                     duration = Cache.weatherDuration
