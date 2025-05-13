@@ -2,9 +2,9 @@
 print("🛒 Shop Stock, Weather, and Egg Monitor Starting...")
 
 -- Configuration
-local API_ENDPOINT = "https://gagdata.vercel.app/api/data"  -- Updated API endpoint
+local API_ENDPOINT = "https://gagdata.vercel.app/api/data"  -- API endpoint
 local API_KEY = "GAMERSBERGGAG"  -- Authorization key
-local CHECK_INTERVAL = 5  -- Check every 5 seconds
+local CHECK_INTERVAL = 1  -- Check every 5 seconds
 local MAX_RETRIES = 3
 
 -- Cache to track changes
@@ -173,11 +173,38 @@ local function hasChanges(oldData, newData)
     return false
 end
 
--- Function to send data to API
+-- Function to clear existing data from the API
+local function clearExistingData()
+    print("🗑️ Clearing existing data from API...")
+    
+    local success, response = pcall(function()
+        -- Send a DELETE request to clear existing data
+        return request({
+            Url = API_ENDPOINT,
+            Method = "DELETE",
+            Headers = {
+                ["Authorization"] = API_KEY
+            }
+        })
+    end)
+    
+    if success then
+        print("✅ Successfully cleared existing data")
+        return true
+    else
+        warn("❌ Failed to clear existing data:", response)
+        return false
+    end
+end
+
+-- Function to send data to API with replace flag
 local function sendToAPI(data)
     local success, response = pcall(function()
         -- Convert data to JSON string (simple version)
         local jsonStr = "{"
+        
+        -- Add replace flag to tell API to replace existing data
+        jsonStr = jsonStr .. '"replace":true,'
         
         -- Add timestamp
         jsonStr = jsonStr .. '"timestamp":' .. data.timestamp .. ','
@@ -222,13 +249,17 @@ local function sendToAPI(data)
         
         jsonStr = jsonStr .. "}"
         
+        -- Try to clear existing data first
+        clearExistingData()
+        
         -- Send request using the supported REQUEST function with authorization header
         return request({
             Url = API_ENDPOINT,
             Method = "POST",
             Headers = {
                 ["Content-Type"] = "application/json",
-                ["Authorization"] = API_KEY  -- Added authorization header
+                ["Authorization"] = API_KEY,
+                ["X-Replace-Data"] = "true"  -- Additional header to indicate replacement
             },
             Body = jsonStr
         })
@@ -309,6 +340,9 @@ end
 local function startMonitoring()
     print("🛒 Shop Stock, Weather, and Egg Monitor Started")
     print("📡 Using API endpoint: " .. API_ENDPOINT)
+    
+    -- Clear any existing data at startup
+    clearExistingData()
     
     -- Setup anti-AFK
     pcall(setupAntiAFK)
