@@ -2,20 +2,17 @@
 print("🛒 Shop Stock, Weather, and Egg Monitor Starting...")
 
 -- Configuration
-local API_ENDPOINT = "https://gagdata.vercel.app/api/data"  -- API endpoint
-local API_KEY = "GAMERSBERGGAG"  -- Authorization key
+local API_ENDPOINT = "https://gagdata.vercel.app/api/data"
+local API_KEY = "GAMERSBERGGAG"
 local CHECK_INTERVAL = 5  -- Check every 5 seconds
+local HEARTBEAT_INTERVAL = 60  -- Send heartbeat every 60 seconds
 local MAX_RETRIES = 3
 
 -- Cache to track changes
 local Cache = {
-    seedStock = {},
-    gearStock = {},
-    eggs = {},
-    currentWeather = "None",
-    weatherDuration = 0,
-    lastUpdate = 0,
-    errorCount = 0
+    seedStock = {}, gearStock = {}, eggs = {},
+    currentWeather = "None", weatherDuration = 0,
+    lastUpdate = 0, lastHeartbeat = 0, errorCount = 0
 }
 
 -- Function to collect egg data
@@ -23,7 +20,6 @@ local function collectEggData()
     print("🥚 Collecting egg data...")
     local Eggs = {}
     
-    -- Try to get the egg data module
     local success, result = pcall(function()
         local ReplicatedStorage = game:GetService("ReplicatedStorage")
         local EggShop = require(ReplicatedStorage.Data.PetEggData)
@@ -31,15 +27,13 @@ local function collectEggData()
         for _, Egg in next, EggShop do
             if Egg.StockChance > 0 then
                 table.insert(Eggs, Egg.EggName)
-                print("🥚 Found egg with stock chance > 0: " .. Egg.EggName)
             end
         end
-        
         return Eggs
     end)
     
     if success then
-        print("✅ Successfully collected egg data: " .. #result .. " eggs found")
+        print("✅ Egg data: " .. #result .. " eggs found")
         return result
     else
         warn("❌ Failed to collect egg data: " .. tostring(result))
@@ -57,24 +51,9 @@ local function checkStock(fruit, shopType)
     return "0"
 end
 
--- Function to get all available seed names
-local function getAvailableSeedNames()
-    local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("Seed_Shop")
-    if not shopUI then return {} end
-
-    local names = {}
-    local scroll = shopUI.Frame.ScrollingFrame
-    for _, item in pairs(scroll:GetChildren()) do
-        if item:IsA("Frame") and not item.Name:match("_Padding$") then
-            table.insert(names, item.Name)
-        end
-    end
-    return names
-end
-
--- Function to get all available gear names
-local function getAvailableGearNames()
-    local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("Gear_Shop")
+-- Function to get available items from a shop
+local function getAvailableItems(shopType)
+    local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild(shopType)
     if not shopUI then return {} end
 
     local names = {}
@@ -89,32 +68,28 @@ end
 
 -- Function to collect all stock data
 local function collectStockData()
-    -- Create a completely new data object (old data gets garbage collected)
     local data = {
-        seeds = {},
-        gear = {},
-        eggs = Cache.eggs,  -- Include egg data
+        seeds = {}, gear = {}, eggs = Cache.eggs,
         weather = {
             type = Cache.currentWeather,
             duration = Cache.weatherDuration
         },
         timestamp = os.time(),
         playerName = game.Players.LocalPlayer.Name,
-        userId = game.Players.LocalPlayer.UserId
+        userId = game.Players.LocalPlayer.UserId,
+        heartbeat = (os.time() - Cache.lastUpdate) >= HEARTBEAT_INTERVAL
     }
     
-    -- Collect seed data (fresh collection, not using old data)
-    local seedNames = getAvailableSeedNames()
+    -- Collect seed data
+    local seedNames = getAvailableItems("Seed_Shop")
     for _, seedName in ipairs(seedNames) do
-        local stock = checkStock(seedName, "Seed_Shop")
-        data.seeds[seedName] = stock
+        data.seeds[seedName] = checkStock(seedName, "Seed_Shop")
     end
     
-    -- Collect gear data (fresh collection, not using old data)
-    local gearNames = getAvailableGearNames()
+    -- Collect gear data
+    local gearNames = getAvailableItems("Gear_Shop")
     for _, gearName in ipairs(gearNames) do
-        local stock = checkStock(gearName, "Gear_Shop")
-        data.gear[gearName] = stock
+        data.gear[gearName] = checkStock(gearName, "Gear_Shop")
     end
     
     return data
@@ -173,41 +148,15 @@ local function hasChanges(oldData, newData)
     return false
 end
 
--- Function to clear existing data from the API
-local function clearExistingData()
-    print("🗑️ Clearing existing data from API...")
-    
-    local success, response = pcall(function()
-        -- Send a DELETE request to clear existing data
-        return request({
-            Url = API_ENDPOINT,
-            Method = "DELETE",
-            Headers = {
-                ["Authorization"] = API_KEY
-            }
-        })
-    end)
-    
-    if success then
-        print("✅ Successfully cleared existing data")
-        return true
-    else
-        warn("❌ Failed to clear existing data:", response)
-        return false
-    end
-end
-
--- Function to send data to API with replace flag
+-- Function to send data to API
 local function sendToAPI(data)
     local success, response = pcall(function()
         -- Convert data to JSON string (simple version)
         local jsonStr = "{"
         
-        -- Add replace flag to tell API to replace existing data
-        jsonStr = jsonStr .. '"replace":true,'
-        
-        -- Add timestamp
+        -- Add timestamp and heartbeat flag
         jsonStr = jsonStr .. '"timestamp":' .. data.timestamp .. ','
+        jsonStr = jsonStr .. '"heartbeat":' .. (data.heartbeat and "true" or "false") .. ','
         
         -- Add player info
         jsonStr = jsonStr .. '"playerName":"' .. data.playerName .. '",'
@@ -249,17 +198,13 @@ local function sendToAPI(data)
         
         jsonStr = jsonStr .. "}"
         
-        -- Try to clear existing data first
-        clearExistingData()
-        
         -- Send request using the supported REQUEST function with authorization header
         return request({
             Url = API_ENDPOINT,
             Method = "POST",
             Headers = {
                 ["Content-Type"] = "application/json",
-                ["Authorization"] = API_KEY,
-                ["X-Replace-Data"] = "true"  -- Additional header to indicate replacement
+                ["Authorization"] = API_KEY
             },
             Body = jsonStr
         })
@@ -299,7 +244,6 @@ end
 local function setupWeatherListener()
     print("🌦️ Setting up weather event listener...")
     
-    -- Fix the syntax for connecting to the weather event
     local success, conn = pcall(function()
         return game.ReplicatedStorage.GameEvents.WeatherEventStarted.OnClientEvent:Connect(function(weatherType, duration)
             print("🌦️ Weather event detected:", weatherType, duration)
@@ -313,8 +257,8 @@ local function setupWeatherListener()
             sendToAPI(currentData)
             
             -- Update cache with new data
-            Cache.seedStock = {}  -- Clear old data
-            Cache.gearStock = {}  -- Clear old data
+            Cache.seedStock = {}
+            Cache.gearStock = {}
             
             -- Copy new data (not references)
             for k, v in pairs(currentData.seeds) do
@@ -341,9 +285,6 @@ local function startMonitoring()
     print("🛒 Shop Stock, Weather, and Egg Monitor Started")
     print("📡 Using API endpoint: " .. API_ENDPOINT)
     
-    -- Clear any existing data at startup
-    clearExistingData()
-    
     -- Setup anti-AFK
     pcall(setupAntiAFK)
     
@@ -356,7 +297,7 @@ local function startMonitoring()
     -- Initial data collection
     local success, initialData = pcall(collectStockData)
     if success then
-        -- Clear old data and store new data (not references)
+        -- Store new data
         Cache.seedStock = {}
         Cache.gearStock = {}
         
@@ -369,6 +310,7 @@ local function startMonitoring()
         end
         
         Cache.lastUpdate = os.time()
+        Cache.lastHeartbeat = os.time()
         
         -- Send initial data
         sendToAPI(initialData)
@@ -389,7 +331,7 @@ local function startMonitoring()
                 currentData.eggs = Cache.eggs
             end
             
-            -- Create a comparison object with the same structure as currentData
+            -- Create comparison object
             local oldData = {
                 seeds = Cache.seedStock,
                 gear = Cache.gearStock,
@@ -401,13 +343,18 @@ local function startMonitoring()
             }
             
             local hasStockChanges = hasChanges(oldData, currentData)
-            local timeForceUpdate = (currentTime - Cache.lastUpdate) >= 300  -- Force update every 5 minutes
+            local needsHeartbeat = (currentTime - Cache.lastHeartbeat) >= HEARTBEAT_INTERVAL
             
-            if hasStockChanges or timeForceUpdate then
-                print("📊 Changes detected or force update triggered")
+            -- Send update if changes detected or heartbeat needed
+            if hasStockChanges or needsHeartbeat then
+                local reason = hasStockChanges and "changes detected" or "heartbeat"
+                print("📊 Sending update: " .. reason)
+                
+                -- Set heartbeat flag if this is a heartbeat update
+                currentData.heartbeat = needsHeartbeat
                 
                 if sendToAPI(currentData) then
-                    -- Clear old data and store new data (not references)
+                    -- Update cache
                     Cache.seedStock = {}
                     Cache.gearStock = {}
                     
@@ -420,6 +367,10 @@ local function startMonitoring()
                     end
                     
                     Cache.lastUpdate = currentTime
+                    if needsHeartbeat then
+                        Cache.lastHeartbeat = currentTime
+                    end
+                    
                     print("📊 Data updated successfully")
                 end
             else
