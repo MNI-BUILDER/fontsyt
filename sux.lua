@@ -3,7 +3,7 @@ print("🛒 Shop Stock and Weather Monitor Starting...")
 
 -- Configuration
 local API_ENDPOINT = "https://gagdata.vercel.app/api/data"  -- Updated API endpoint
-local API_KEY = "GAMERSBERGAG"  -- Authorization key
+local API_KEY = "GAMERSBERGGAG"  -- Authorization key
 local CHECK_INTERVAL = 5  -- Check every 5 seconds
 local MAX_RETRIES = 3
 
